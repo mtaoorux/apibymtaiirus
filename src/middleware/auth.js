@@ -16,12 +16,15 @@ function requireAdmin(req, res, next) {
     jwt.verify(token, JWT_SECRET);
     return next();
   } catch {
-    const wantsJson =
-      req.path.startsWith("/admin/api") ||
-      (req.headers.accept || "").includes("application/json");
+    // req.path is relative to mount point; use originalUrl to check the full path
+    const isApiRoute =
+      req.originalUrl.includes("/admin/api") ||
+      req.originalUrl.startsWith("/api/") ||
+      (req.headers.accept || "").includes("application/json") ||
+      (req.headers["content-type"] || "").includes("application/json");
 
-    if (wantsJson) {
-      return res.status(401).json({ error: "Unauthorized — please login at /admin/login" });
+    if (isApiRoute) {
+      return res.status(401).json({ error: "Unauthorized", hint: "Login at /admin/login" });
     }
     return res.redirect("/admin/login");
   }
