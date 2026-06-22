@@ -1,4 +1,3 @@
-
 /**
  * CORS middleware — open to all origins.
  * The domain whitelist (domainCheck.js) handles access control;
