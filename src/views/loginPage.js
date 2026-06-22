@@ -86,9 +86,10 @@ async function login() {
   err.style.display = 'none';
   try {
     const r = await fetch('/admin/api/login', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ password: pw }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body:        JSON.stringify({ password: pw }),
     });
     if (r.ok) {
       location.href = '/admin';
