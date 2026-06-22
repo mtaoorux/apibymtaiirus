@@ -3,7 +3,7 @@
  * server.js — MTAIIRUS Multi-Institute Proxy
  *
  * ENV vars (set in Render dashboard):
- *   ADMIN_PASSWORD  — admin login password  (default: admin123  ← CHANGE THIS)
+ *   ADMIN_PASSWORD  — admin login password  (default: paar123  ← CHANGE THIS)
  *   JWT_SECRET      — JWT signing secret    (default: change-me-please)
  *   PORT            — server port           (default: 3000)
  */
