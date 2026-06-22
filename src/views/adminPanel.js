@@ -392,10 +392,15 @@ function toast(msg, type='ok') {
 async function api(method, url, body) {
   const r = await fetch(url, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const d = await r.json();
+  if (r.status === 401) { location.href = '/admin/login'; return; }
+  const text = await r.text();
+  let d;
+  try { d = JSON.parse(text); }
+  catch { throw new Error('Server error: ' + text.slice(0, 120)); }
   if (!r.ok) throw new Error(d.error || 'Request failed');
   return d;
 }
