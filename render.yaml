@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: mtaiirus-proxy
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_PASSWORD
+        value: your-strong-password-here
+      - key: JWT_SECRET
+        value: your-random-secret-here
+      - key: PORT
+        value: 3000
