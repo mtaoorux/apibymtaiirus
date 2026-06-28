@@ -41,7 +41,7 @@ async function seedDefaults() {
 const ADMIN_HASH = bcrypt.hashSync(ADMIN_PASS, 10);
 
 function requireAdmin(req, res, next) {
-  const token = req.cookies?.token || (req.headers.authorization || "").replace("Bearer ", "");
+  const token = req.cookies?.token || (req.headers.authorization || "").replace("Bearer ", "") || req.query?.token || "";
   try {
     jwt.verify(token, JWT_SECRET);
     return next();
@@ -102,7 +102,8 @@ app.post("/admin/api/login", (req, res) => {
   if (!password || !bcrypt.compareSync(password, ADMIN_HASH))
     return res.status(401).json({ error: "Incorrect password" });
   const token = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "8h" });
-  res.cookie("token", token, { httpOnly: true, maxAge: 8 * 60 * 60 * 1000, sameSite: "lax" });
+  const isHttps = req.headers["x-forwarded-proto"] === "https";
+  res.cookie("token", token, { httpOnly: true, maxAge: 8 * 60 * 60 * 1000, sameSite: "lax", secure: isHttps });
   res.json({ ok: true, token });
 });
 
@@ -320,7 +321,7 @@ async function login(){
       headers:{'Content-Type':'application/json','Accept':'application/json'},
       body:JSON.stringify({password:pw})
     });
-    if(r.ok){location.href='/admin';}
+    if(r.ok){const d=await r.json();try{localStorage.setItem('_at',d.token);}catch(e){}location.href='/admin';}
     else{document.getElementById('err').style.display='block';btn.disabled=false;btn.textContent='Sign In →';}
   }catch{
     document.getElementById('err').textContent='❌ Server error.';
@@ -576,8 +577,9 @@ function toast(msg,type='ok'){
 }
 
 async function api(method,url,body){
-  const r=await fetch(url,{method,credentials:'include',headers:{'Content-Type':'application/json','Accept':'application/json'},body:body?JSON.stringify(body):undefined});
-  if(r.status===401){location.href='/admin/login';return;}
+  const token=localStorage.getItem('_at')||'';
+  const r=await fetch(url,{method,credentials:'include',headers:{'Content-Type':'application/json','Accept':'application/json','Authorization':token?'Bearer '+token:''},body:body?JSON.stringify(body):undefined});
+  if(r.status===401){localStorage.removeItem('_at');location.href='/admin/login';return;}
   const text=await r.text();
   let d;try{d=JSON.parse(text);}catch{throw new Error('Server error: '+text.slice(0,120));}
   if(!r.ok)throw new Error(d.error||'Request failed');
