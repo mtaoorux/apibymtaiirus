@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: munilsir-proxy
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "18.20.4"
+      - key: MUNILSIR_AUTH
+        sync: false
+      - key: MUNILSIR_ID
+        value: "122339"
+      - key: AES_KEY_TEXT
+        value: "638udh3829162018"
+      - key: AES_IV_TEXT
+        value: "fedcba9876543210"
