@@ -1,20 +1,19 @@
-
 {
-  "name": "mtaiirus-proxy",
-  "version": "2.0.0",
-  "description": "Multi-institute proxy with admin panel for domain whitelisting",
+  "name": "munilsir-proxy",
+  "version": "1.0.0",
+  "description": "Proxy API for Munil Sir (study.munilsir.com)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "cookie-parser": "^1.4.7",
-    "express": "^4.19.2",
-    "http-proxy-middleware": "^3.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "nedb-promises": "^6.2.1"
-  }
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.1"
+  },
+  "keywords": ["proxy", "munilsir", "api"],
+  "license": "MIT"
 }
