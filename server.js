@@ -1,5 +1,5 @@
 // ============================================================
-// Munil Sir Proxy Server — Optimized + Rate-Limit-Safe
+// Munil Sir Proxy Server — Render Deployment Edition
 // API Base: https://munilsirapi.akamai.net.in
 // Site:     https://study.munilsir.com
 // ============================================================
@@ -12,7 +12,12 @@ const http = require('http');
 const https = require('https');
 
 const app = express();
+
+// Render assigns PORT dynamically
 const PORT = process.env.PORT || 3001;
+
+// Trust Render's proxy (fixes req.ip for rate limiter)
+app.set('trust proxy', 1);
 
 // ============================================================
 // ✅ CORS — FIRST
@@ -56,7 +61,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// Periodic cleanup (not per-request)
 setInterval(() => {
     const now = Date.now();
     for (const [k, v] of ipHits.entries()) {
@@ -83,13 +87,9 @@ const cache = new Map();
 function cacheGet(key) {
     const entry = cache.get(key);
     if (!entry) return null;
-    if (Date.now() - entry.t > CACHE_TTL_MS) {
-        cache.delete(key);
-        return null;
-    }
+    if (Date.now() - entry.t > CACHE_TTL_MS) { cache.delete(key); return null; }
     return entry.v;
 }
-
 function cacheSet(key, value) {
     cache.set(key, { v: value, t: Date.now() });
     if (cache.size > 500) {
@@ -101,15 +101,11 @@ function cacheSet(key, value) {
 }
 
 // ============================================================
-// ⚡ Upstream rate limiter + request queue
+// ⚡ Upstream rate limiter + queue
 // ============================================================
 const RATE_LIMIT = {
-    maxRequests: 3,
-    windowMs: 1000,
-    queue: [],
-    activeCount: 0,
-    windowStart: Date.now(),
-    requestCount: 0,
+    maxRequests: 3, windowMs: 1000, queue: [],
+    activeCount: 0, windowStart: Date.now(), requestCount: 0,
 };
 let windowTimer = null;
 
@@ -129,41 +125,30 @@ function processQueue() {
         RATE_LIMIT.windowStart = now;
         RATE_LIMIT.requestCount = 0;
     }
-
     if (RATE_LIMIT.requestCount >= RATE_LIMIT.maxRequests) {
         if (!windowTimer) {
             const waitMs = RATE_LIMIT.windowMs - (now - RATE_LIMIT.windowStart);
-            windowTimer = setTimeout(() => {
-                windowTimer = null;
-                processQueue();
-            }, waitMs + 50);
+            windowTimer = setTimeout(() => { windowTimer = null; processQueue(); }, waitMs + 50);
         }
         return;
     }
-
     const item = RATE_LIMIT.queue.shift();
     if (!item) return;
-
     RATE_LIMIT.activeCount++;
     RATE_LIMIT.requestCount++;
-
-    Promise.resolve()
-        .then(() => item.fn())
-        .then((result) => item.resolve(result))
-        .catch((err) => item.reject(err))
-        .finally(() => {
-            RATE_LIMIT.activeCount--;
-            setImmediate(processQueue);
-        });
+    Promise.resolve().then(() => item.fn())
+        .then((r) => item.resolve(r))
+        .catch((e) => item.reject(e))
+        .finally(() => { RATE_LIMIT.activeCount--; setImmediate(processQueue); });
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // ============================================================
-// 🔑 Munil Sir Credentials
+// 🔑 Credentials
 // ============================================================
-const MUNILSIR_API_BASE = 'https://munilsirapi.akamai.net.in';
-const MUNILSIR_ORIGIN   = 'https://study.munilsir.com';
+const MUNILSIR_API_BASE = process.env.MUNILSIR_API_BASE || 'https://munilsirapi.akamai.net.in';
+const MUNILSIR_ORIGIN   = process.env.MUNILSIR_ORIGIN   || 'https://study.munilsir.com';
 
 const AUTH = process.env.MUNILSIR_AUTH ||
     "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6IjEyMjMzOSIsInRpbWVzdGFtcCI6MTc3OTkyMDc2MCwiaXZfdmVyIjo1LCJzZXNzaW9uIjoiZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnBaQ0k2SWpFeU1qTXpPU0lzSW1WdFlXbHNJam9pYlc5c2FXc3VPWGhBWjIxaGFXd3VZMjl0SWl3aWJtRnRaU0k2SWsxdmJHbHJJRXRwY21GeUlpd2lkR1Z1WVc1MFZIbHdaU0k2SW5WelpYSWlMQ0owWlc1aGJuUk9ZVzFsSWpvaWJYVnVhV3h6YVhKZlpHSWlMQ0owWlc1aGJuUkpaQ0k2SWlJc0ltUnBjM0J2YzJGaWJHVWlPbVpoYkhObGZRLkpIYjZsWllNMk9WcWxqWGtMZkZTWV83NkpYMkQ3TXYyYUlKRThzSndtOWsifQ.Rc62G9Y1nopPktxbt9Ot2A6MmhW6YeX5SSvGz2SwYf8";
@@ -194,18 +179,15 @@ function getOriginHeaders() {
 }
 
 // ============================================================
-// AES-128-CBC Decryption (same as Vibrant — ClassX standard)
+// AES-128-CBC Decryption
 // ============================================================
 function decryptLink(encryptedText) {
-    if (typeof encryptedText !== "string" || !encryptedText.length) {
+    if (typeof encryptedText !== "string" || !encryptedText.length)
         throw new Error("decryptLink: input must be a non-empty string");
-    }
     const firstPart = encryptedText.split(":")[0];
     const encryptedBytes = Buffer.from(firstPart, "base64");
-
-    if (!encryptedBytes.length || encryptedBytes.length % 16 !== 0) {
+    if (!encryptedBytes.length || encryptedBytes.length % 16 !== 0)
         throw new Error("decryptLink: ciphertext length must be a multiple of 16");
-    }
     const key = Buffer.from(AES_KEY_TEXT, "utf8");
     const iv  = Buffer.from(AES_IV_TEXT,  "utf8");
     if (key.length !== 16) throw new Error("AES key must be 16 bytes");
@@ -214,8 +196,7 @@ function decryptLink(encryptedText) {
     const decipher = crypto.createDecipheriv("aes-128-cbc", key, iv);
     decipher.setAutoPadding(true);
     try {
-        const decrypted = Buffer.concat([decipher.update(encryptedBytes), decipher.final()]);
-        return decrypted.toString("utf8");
+        return Buffer.concat([decipher.update(encryptedBytes), decipher.final()]).toString("utf8");
     } catch {
         const decipher2 = crypto.createDecipheriv("aes-128-cbc", key, iv);
         decipher2.setAutoPadding(false);
@@ -266,14 +247,12 @@ function decryptFields(node) {
 }
 
 // ============================================================
-// ⚡ Upstream fetch — rate-limited, 429-aware, backoff
+// ⚡ Upstream fetch
 // ============================================================
 async function fetchUpstream(targetUrl, retries = 3) {
     const startTime = Date.now();
-
     return enqueueRequest(async () => {
         let lastError;
-
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
                 console.log(`📡 [upstream] attempt ${attempt}/${retries}: ${targetUrl}`);
@@ -281,39 +260,30 @@ async function fetchUpstream(targetUrl, retries = 3) {
                     headers: getOriginHeaders(),
                     timeout: 30000,
                     maxRedirects: 5,
-                    httpAgent,
-                    httpsAgent,
+                    httpAgent, httpsAgent,
                     transformResponse: [(data) => data],
                     validateStatus: (s) => s < 500,
                 });
-
                 if (response.status === 429) {
                     const retryAfter = parseInt(response.headers['retry-after'] || '0', 10);
-                    const waitMs = retryAfter > 0
-                        ? retryAfter * 1000
+                    const waitMs = retryAfter > 0 ? retryAfter * 1000
                         : Math.min(1000 * Math.pow(2, attempt), 30000);
-
-                    console.warn(`⏳ [upstream] 429. Waiting ${waitMs}ms before retry ${attempt}/${retries}`);
+                    console.warn(`⏳ [upstream] 429. Waiting ${waitMs}ms`);
                     if (attempt < retries) { await sleep(waitMs); continue; }
                     const err = new Error('Upstream rate limit exceeded (429)');
                     err.response = response;
                     throw err;
                 }
-
-                const elapsed = Date.now() - startTime;
-                console.log(`✅ [upstream] done in ${elapsed}ms (status ${response.status})`);
+                console.log(`✅ [upstream] done in ${Date.now() - startTime}ms`);
                 return response;
             } catch (err) {
                 lastError = err;
-                if (err.response && err.response.status >= 400 && err.response.status < 500 && err.response.status !== 429) {
-                    console.error(`❌ [upstream] client error ${err.response.status}, not retrying`);
+                if (err.response && err.response.status >= 400
+                    && err.response.status < 500 && err.response.status !== 429) {
                     throw err;
                 }
-                const elapsed = Date.now() - startTime;
-                console.error(`❌ [upstream] attempt ${attempt} failed after ${elapsed}ms: ${err.message}`);
                 if (attempt < retries) {
                     const backoff = Math.min(500 * Math.pow(2, attempt - 1), 8000);
-                    console.log(`⏳ [upstream] backing off ${backoff}ms...`);
                     await sleep(backoff);
                 }
             }
@@ -322,49 +292,32 @@ async function fetchUpstream(targetUrl, retries = 3) {
     });
 }
 
-// ============================================================
-// Standard error responder
-// ============================================================
 function sendError(res, error, extra = {}) {
     const status = error.response?.status ?? 500;
     if (status === 429) res.set('Retry-After', '10');
     res.status(status).json({
-        success: false,
-        error: error.message,
-        status,
-        data: error.response?.data ?? null,
-        ...extra,
+        success: false, error: error.message, status,
+        data: error.response?.data ?? null, ...extra,
     });
 }
 
 // ============================================================
-// Batches (from study.munilsir.com — update as needed)
+// Batches
 // ============================================================
 const batches = [
-    {
-        id: 86,
-        title: "Munil Sir — Main Batch",
-        imageUrl: "",
-        price: "Free",
-        originalPrice: "",
-        discount: ""
-    },
-    // Add more batches here as you discover their course IDs
+    { id: 86, title: "Munil Sir — Main Batch", imageUrl: "", price: "Free", originalPrice: "", discount: "" },
 ];
-
-function findBatch(id) {
-    return batches.find((b) => b.id === Number(id)) || null;
-}
+function findBatch(id) { return batches.find((b) => b.id === Number(id)) || null; }
 
 // ============================================================
 // ROUTES
 // ============================================================
-
 app.get("/health", (req, res) => {
     res.json({
         status: "OK",
         platform: "Munil Sir",
         api: MUNILSIR_API_BASE,
+        uptime: process.uptime(),
         timestamp: new Date().toISOString(),
         cacheSize: cache.size,
         queueLength: RATE_LIMIT.queue.length,
@@ -380,8 +333,7 @@ app.get("/", (req, res) => {
         status: "running",
         cacheSize: cache.size,
         routes: [
-            "/health",
-            "/batches",
+            "/health", "/batches",
             "/decrypt?text=<encrypted>",
             "/detail?id=<batchId>",
             "/folder_contents?course_id=&folder_id=&decrypt=1",
@@ -405,186 +357,121 @@ app.get("/decrypt", (req, res) => {
     }
 });
 
-// ============================================================
-// /detail — cached
-// ============================================================
 app.get("/detail", async (req, res) => {
     const startTime = Date.now();
     try {
         const { id } = req.query;
         if (!id) return res.status(400).json({ error: "Missing required query param: id" });
-
         const batch = findBatch(id);
-        if (!batch) {
-            return res.status(404).json({
-                error: "Batch not found", id,
-                available: batches.map((b) => b.id),
-            });
-        }
+        if (!batch) return res.status(404).json({
+            error: "Batch not found", id, available: batches.map((b) => b.id)
+        });
 
         const cacheKey = `detail:${batch.id}`;
         const cached = cacheGet(cacheKey);
-        if (cached) {
-            console.log(`⚡ [detail] cache HIT: ${cacheKey}`);
-            return res.json(cached);
-        }
+        if (cached) return res.json(cached);
 
-        const targetUrl =
-            `${MUNILSIR_API_BASE}/get/folder_contentsv3` +
-            `?course_id=${encodeURIComponent(batch.id)}` +
-            `&parent_id=0&windowsapp=false&start=0`;
+        const targetUrl = `${MUNILSIR_API_BASE}/get/folder_contentsv3`
+            + `?course_id=${encodeURIComponent(batch.id)}`
+            + `&parent_id=0&windowsapp=false&start=0`;
 
         const response = await fetchUpstream(targetUrl);
         let payload = response.data;
-        if (typeof payload === 'string') {
-            try { payload = JSON.parse(payload); } catch {}
-        }
+        if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
         payload = decryptFields(payload);
 
         const result = { success: true, batch, contents: payload };
         cacheSet(cacheKey, result);
         res.json(result);
     } catch (error) {
-        console.error("❌ [detail] error:", error.message);
         sendError(res, error, { elapsedMs: Date.now() - startTime });
     }
 });
 
-// ============================================================
-// /folder_contents — CACHED
-// ============================================================
 app.get("/folder_contents", async (req, res) => {
     const startTime = Date.now();
     try {
         const { course_id, folder_id, parent_id, decrypt } = req.query;
-
-        if (!course_id) {
-            return res.status(400).json({ error: "Missing required query param: course_id" });
-        }
+        if (!course_id) return res.status(400).json({ error: "Missing required query param: course_id" });
 
         const folderId = folder_id ?? parent_id ?? '-1';
         const cacheKey = `folder:${course_id}:${folderId}:${decrypt || 0}`;
-
         const cached = cacheGet(cacheKey);
-        if (cached) {
-            console.log(`⚡ [folder_contents] cache HIT: ${cacheKey}`);
-            return res.json(cached);
-        }
+        if (cached) return res.json(cached);
 
-        const targetUrl =
-            `${MUNILSIR_API_BASE}/get/folder_contentsv3` +
-            `?course_id=${encodeURIComponent(course_id)}` +
-            `&parent_id=${encodeURIComponent(folderId)}` +
-            `&windowsapp=false&start=0`;
+        const targetUrl = `${MUNILSIR_API_BASE}/get/folder_contentsv3`
+            + `?course_id=${encodeURIComponent(course_id)}`
+            + `&parent_id=${encodeURIComponent(folderId)}`
+            + `&windowsapp=false&start=0`;
 
         const response = await fetchUpstream(targetUrl);
         let payload = response.data;
-        if (typeof payload === 'string') {
-            try { payload = JSON.parse(payload); } catch {}
-        }
-        if (decrypt === "1" || decrypt === "true") {
-            payload = decryptFields(payload);
-        }
+        if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+        if (decrypt === "1" || decrypt === "true") payload = decryptFields(payload);
 
         cacheSet(cacheKey, payload);
-        console.log(`✅ [folder_contents] done in ${Date.now() - startTime}ms`);
         res.json(payload);
     } catch (error) {
-        console.error(`❌ [folder_contents] failed:`, error.message);
         sendError(res, error, { elapsedMs: Date.now() - startTime });
     }
 });
 
-// ============================================================
-// /video_details — cached
-// ============================================================
 app.get("/video_details", async (req, res) => {
-    const startTime = Date.now();
     try {
-        const {
-            course_id, video_id,
-            ytflag = "0", folder_wise_course = "1",
-            lc_app_api_url = "", decrypt
-        } = req.query;
-
-        if (!course_id || !video_id) {
-            return res.status(400).json({
-                error: "Missing required query params: course_id and video_id"
-            });
-        }
+        const { course_id, video_id, ytflag = "0",
+                folder_wise_course = "1", lc_app_api_url = "", decrypt } = req.query;
+        if (!course_id || !video_id) return res.status(400).json({
+            error: "Missing required query params: course_id and video_id"
+        });
 
         const cacheKey = `video:${course_id}:${video_id}:${decrypt || 0}`;
         const cached = cacheGet(cacheKey);
-        if (cached) {
-            console.log(`⚡ [video_details] cache HIT: ${cacheKey}`);
-            return res.json(cached);
-        }
+        if (cached) return res.json(cached);
 
-        const targetUrl =
-            `${MUNILSIR_API_BASE}/get/fetchVideoDetailsById` +
-            `?course_id=${encodeURIComponent(course_id)}` +
-            `&video_id=${encodeURIComponent(video_id)}` +
-            `&ytflag=${encodeURIComponent(ytflag)}` +
-            `&folder_wise_course=${encodeURIComponent(folder_wise_course)}` +
-            `&lc_app_api_url=${encodeURIComponent(lc_app_api_url)}`;
+        const targetUrl = `${MUNILSIR_API_BASE}/get/fetchVideoDetailsById`
+            + `?course_id=${encodeURIComponent(course_id)}`
+            + `&video_id=${encodeURIComponent(video_id)}`
+            + `&ytflag=${encodeURIComponent(ytflag)}`
+            + `&folder_wise_course=${encodeURIComponent(folder_wise_course)}`
+            + `&lc_app_api_url=${encodeURIComponent(lc_app_api_url)}`;
 
         const response = await fetchUpstream(targetUrl);
         let payload = response.data;
-        if (typeof payload === 'string') {
-            try { payload = JSON.parse(payload); } catch {}
-        }
-        if (decrypt === "1" || decrypt === "true") {
-            payload = decryptFields(payload);
-        }
+        if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+        if (decrypt === "1" || decrypt === "true") payload = decryptFields(payload);
 
         cacheSet(cacheKey, payload);
         res.json(payload);
     } catch (error) {
-        console.error("❌ [video_details] error:", error.message);
-        sendError(res, error, { elapsedMs: Date.now() - startTime });
+        sendError(res, error);
     }
 });
 
-// ============================================================
-// /vib/* — generic proxy
-// ============================================================
 app.get("/vib/*", async (req, res) => {
-    const startTime = Date.now();
     try {
         const endpointPath = req.originalUrl.replace(/^\/vib/, "");
         const targetUrl = `${MUNILSIR_API_BASE}${endpointPath}`;
-
         const cacheKey = `vib:${endpointPath}`;
         const cached = cacheGet(cacheKey);
-        if (cached) {
-            console.log(`⚡ [vib] cache HIT: ${cacheKey}`);
-            return res.json(cached);
-        }
+        if (cached) return res.json(cached);
 
         const response = await fetchUpstream(targetUrl);
         let payload = response.data;
-        if (typeof payload === 'string') {
-            try { payload = JSON.parse(payload); } catch {}
-        }
+        if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
         if (req.query.decrypt === "1" || req.query.decrypt === "true") {
             payload = decryptFields(payload);
         }
-
         cacheSet(cacheKey, payload);
         res.json(payload);
     } catch (error) {
-        console.error("❌ [vib] error:", error.message);
-        sendError(res, error, { elapsedMs: Date.now() - startTime });
+        sendError(res, error);
     }
 });
 
-// ============================================================
 // 404 + Error handler
-// ============================================================
 app.use((req, res) => {
     res.status(404).json({ error: "Route not found", path: req.path });
 });
-
 app.use((err, req, res, next) => {
     console.error("❌ Unhandled error:", err);
     res.status(500).json({ error: "Internal server error", message: err.message });
@@ -593,15 +480,10 @@ app.use((err, req, res, next) => {
 // ============================================================
 // Start server
 // ============================================================
-app.listen(PORT, () => {
-    console.log(`🚀 Munil Sir Proxy Server on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Munil Sir Proxy on port ${PORT}`);
     console.log(`   API: ${MUNILSIR_API_BASE}`);
     console.log(`   Site: ${MUNILSIR_ORIGIN}`);
-    console.log(`   User ID: ${USER_ID}`);
-    console.log(`   /health              →  status check`);
-    console.log(`   /detail?id=86        →  batch detail`);
-    console.log(`   /folder_contents?... →  folder listing (cached 15min)`);
-    console.log(`   /video_details?...   →  video details (cached 15min)`);
 });
 
 module.exports = app;
