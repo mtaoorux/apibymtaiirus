@@ -1,17 +1,16 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const axios = require('axios');
 const FormData = require('form-data');
 
 // ================== CONFIG ==================
-const PW_API_BASE   = process.env.PW_API_BASE   || 'https://a.pimaxer.in';
-const BOT_TOKEN     = process.env.BOT_TOKEN;
-const CHANNEL_ID    = process.env.CHANNEL_ID    || '@merate_official2026lala';
-const LOCAL_API     = process.env.LOCAL_API     || 'http://localhost:8081';
-const PAGE_LIMIT    = parseInt(process.env.PAGE_LIMIT    || '1', 10);
-const SLEEP_BETWEEN = parseInt(process.env.SLEEP_BETWEEN || '3000', 10);
+const PW_API_BASE    = process.env.PW_API_BASE    || 'https://a.pimaxer.in';
+const BOT_TOKEN      = process.env.BOT_TOKEN;
+const CHANNEL_ID     = process.env.CHANNEL_ID     || '@merate_official2026lala';
+const LOCAL_API      = process.env.LOCAL_API      || 'http://localhost:8081';
+const PAGE_LIMIT     = parseInt(process.env.PAGE_LIMIT    || '1', 10);
+const SLEEP_BETWEEN  = parseInt(process.env.SLEEP_BETWEEN || '3000', 10);
 const KEEP_LOCAL_MP4 = (process.env.KEEP_LOCAL_MP4 || 'false') === 'true';
 
 const WORK_DIR = path.resolve('./lectures');
@@ -53,40 +52,53 @@ async function getContents(batchId, subjectId, slug) {
   return j.data || [];
 }
 
-// ================== MPD → MP4 ==================
-function runFFmpeg(args) {
-  return new Promise((resolve) => {
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-    proc.stderr.on('data', (d) => (stderr += d.toString()));
-    proc.on('close', (code) => resolve({ code, stderr }));
-    proc.on('error', (err) => resolve({ code: -1, stderr: err.message }));
-  });
-}
-
-async function mpdToMp4(mpdUrl, outPath) {
+// ================== Download MP4 to disk ==================
+async function downloadMp4(url, outPath) {
   if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
     console.log(`    ⏭️  Exists: ${path.basename(outPath)}`);
     return true;
   }
 
-  const args = [
-    '-y', '-hide_banner', '-loglevel', 'error',
-    '-rw_timeout', '30000000',
-    '-i', mpdUrl,
-    '-map', '0:v:0', '-map', '0:a:0?',
-    '-c', 'copy', '-movflags', '+faststart',
-    outPath,
-  ];
-  console.log(`    🎬 Building file: ${path.basename(outPath)}`);
-  const { code, stderr } = await runFFmpeg(args);
-  if (code !== 0) {
-    console.log(`    ❌ FFmpeg: ${stderr.trim().slice(-400)}`);
+  console.log(`    ⬇️  Downloading: ${path.basename(outPath)}`);
+
+  try {
+    const resp = await axios.get(url, {
+      responseType: 'stream',
+      timeout: 0,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+
+    // Honor server-reported content-length if present
+    const expected = parseInt(resp.headers['content-length'] || '0', 10);
+    const writer = fs.createWriteStream(outPath);
+
+    await new Promise((resolve, reject) => {
+      resp.data.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+      resp.data.on('error', reject);
+    });
+
+    const actual = fs.statSync(outPath).size;
+    if (actual === 0) {
+      console.log(`    ❌ Zero-byte download`);
+      try { fs.unlinkSync(outPath); } catch (_) {}
+      return false;
+    }
+    if (expected && actual !== expected) {
+      console.log(`    ⚠️  Size mismatch (${actual}/${expected}) — keeping anyway`);
+    }
+
+    const sizeMb = actual / 1024 / 1024;
+    console.log(`    ✔ Downloaded: ${sizeMb.toFixed(1)} MB`);
+    return true;
+  } catch (err) {
+    console.log(`    ❌ Download failed: ${err.message}`);
+    try { fs.unlinkSync(outPath); } catch (_) {}
     return false;
   }
-  const sizeMb = fs.statSync(outPath).size / 1024 / 1024;
-  console.log(`    ✔ Ready: ${sizeMb.toFixed(1)} MB`);
-  return true;
 }
 
 // ================== Upload FILE to Telegram ==================
@@ -109,7 +121,7 @@ async function uploadFileAsVideo(mp4Path, caption) {
       headers: form.getHeaders(),
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
-      timeout: 3600 * 1000, // 1 hour
+      timeout: 3600 * 1000,
     });
     if (data.ok) {
       console.log(`    ✅ message_id=${data.result.message_id}`);
@@ -126,10 +138,7 @@ async function uploadFileAsVideo(mp4Path, caption) {
 
 // ================== Pipeline ==================
 function safeName(text) {
-  return (text || 'lecture')
-    .replace(/[^a-zA-Z0-9 _-]/g, '')
-    .slice(0, 60)
-    .trim() || 'lecture';
+  return (text || 'lecture').replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 60).trim() || 'lecture';
 }
 
 async function processBatch(batch) {
@@ -151,19 +160,20 @@ async function processBatch(batch) {
       const contents = await getContents(bid, sid, slug);
       for (const item of contents) {
         const title = item.topic || 'Untitled';
-        const mpd = item.url || '';
-        if (!mpd.endsWith('.mpd')) {
-          console.log(`    ⚠️  Skip non-MPD: ${title}`);
+        const videoUrl = item.url || '';
+
+        // Only real MP4 URLs (allow signed query strings)
+        if (!/\.mp4(\?.*)?$/i.test(videoUrl)) {
+          console.log(`    ⚠️  Skip (not mp4): ${title}`);
           continue;
         }
 
         const outPath = path.join(WORK_DIR, `${safeName(title)}.mp4`);
 
-        // STEP 1: build actual video file on disk
-        const built = await mpdToMp4(mpd, outPath);
-        if (!built) continue;
+        // STEP 1: download the actual video file
+        if (!(await downloadMp4(videoUrl, outPath))) continue;
 
-        // STEP 2: upload the FILE bytes (not a link)
+        // STEP 2: upload the file (not a link)
         const caption = `**${title}**\n\n📚 ${bname}\n📖 ${sname}`;
         const ok = await uploadFileAsVideo(outPath, caption);
 
@@ -185,14 +195,14 @@ async function checkHealth() {
     console.log(`🔑 PW token user=${t.username} expired=${t.expired} expires_at=${t.expires_at}`);
     return !t.expired;
   } catch (err) {
-    console.log(`❌ PW health check failed: ${err.message}`);
+    console.log(`❌ Health check failed: ${err.message}`);
     return false;
   }
 }
 
 async function main() {
   if (!(await checkHealth())) {
-    console.error('❌ PW token expired or API unreachable — aborting.');
+    console.error('❌ PW token expired or API unreachable.');
     process.exit(1);
   }
 
